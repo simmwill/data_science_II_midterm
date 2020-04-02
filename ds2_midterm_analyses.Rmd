@@ -1,0 +1,652 @@
+---
+# title: "Data Science II, Midterm"
+# author: "Will Simmons"
+# date: "3/24/2020"
+output: pdf_document
+header-includes:
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+editor_options: 
+  chunk_output_type: console
+---
+
+<!-- LaTeX Formatting -->
+\fancypagestyle{plain}{\pagestyle{fancy}}
+\fancyhead[LO,LE]{Will Simmons}
+\fancyhead[RO,RE]{P8106: Data Science II Midterm\newline 05 April 2020}
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+library(cairoDevice)
+
+knitr::opts_chunk$set(
+  echo = FALSE, 
+  message = FALSE, 
+  warning = FALSE
+)
+
+```
+
+
+```{r}
+
+library(tidyverse)
+library(conflicted)
+conflict_prefer("filter", "dplyr")
+library(readr)
+library(lubridate)
+library(caret)
+
+```
+
+
+## 1. **Introduction**
+
+*Background.*
+
+The consequences of a changing climate are many and far-reaching. One consequence that has gained significant attention over the past decade is ocean deoxygenation, a decrease in levels of dissolved O~2~. The impacts of ocean deoxygenation are only now becoming fully apparent: e.g. changes to ocean biogeochemistry, macro- and microorganism death due to hypoxia, and increased ocean production of nitrous oxide (N~2~O), a greenhouse gas (Keeling et al., 2010).
+
+Thus, we wanted to answer the questions: what factors predict ocean deoxygenation over time? Given these factors, are we able to accurately predict ocean oxygenation in new data? Oceanic levels of O~2~ determine global populations' access to food and other resources, and the ability to predict this information may guide policies by (1) generating potentially-useful information on factors important to preventing or slowing deoxygenation, and (2) demonstrating potential future trends.
+
+*Data cleaning and preparation.*
+
+We are using data from the California Cooperative Oceanic Fisheries Investigations (CalCOFI), which we downloaded from Kaggle [(link)](https://www.kaggle.com/sohier/calcofi). CalCOFI’s data represent the longest oceanographic time series in the world, spanning the years 1949 to 2016. Measured off the coast of California, the dataset includes larval and egg abundance data on 250+ species, as well as oceanographic data such as water temperature, salinity, chlorophyll, and oxygenation.
+
+After downloading and importing the data, I cleaned and prepared it. Next, I restricted the dataset to observations after 2008. The original timeseries was quite long (1949-2016, with 800k+ observations) and would have significantly increased computational effort; this also provides a more current (i.e. approximately prior-decade) interpretation of results. For this same reason of computational efficiency, I also took a 10% random sample from the resulting dataset of ~46k, leaving me with ~4,600 observations.
+
+Next, I removed from consideration features with large amounts of missing data. We had selected a preliminary list of predictors, but several of these had large proportions of data missing. Finally, for the 14 features that remained (see [Models](#models) section for the final list), I removed any missing values for predictors. 
+
+After a final dataset was created for analytic purposes, training and testing datasets were created using `caret::createDataPartition()`, with 80 percent of data dedicated to training and 20 percent to testing. The training set was used for all subsequent analyses, including comparison of candidate models, with the testing set only used to evaluate the final chosen mode.
+
+Using the training set, I explored outliers for all variables contained in the dataset. While some variables had extremely skewed distributions (e.g. right-skewed phaeophytin, ammonium, and nitrite concentrations), none had outliers visible from boxplots that warranted consideration of correction. Exploratory outlier visualizations are not shown in this document, but code for the boxplots is included in an appendix at the bottom of the submitted RMarkdown file.
+
+<!-- Importing Data -->
+
+```{r}
+
+# Bottle data - multiple bottles per cast
+bottle = read_csv('./data/bottle.csv',
+                  col_types = cols(
+                    O2ml_L = col_double(),
+                    O2Sat = col_double(),
+                    `Oxy_µmol/Kg` = col_double(),
+                    R_O2 = col_double(),
+                    R_O2Sat = col_double(),
+                    PO4uM = col_double(),
+                    R_PO4 = col_double(),
+                    SiO3uM = col_double(),
+                    NO3uM = col_double(),
+                    R_SIO3 = col_double(),
+                    R_NO3 = col_double(),
+                    NO2uM = col_double(),
+                    R_NO2 = col_double(),
+                    ChlorA = col_double(),
+                    Phaeop = col_double(),
+                    R_CHLA = col_double(),
+                    R_PHAEO = col_double(),
+                    C14As1 = col_double(),
+                    C14As2 = col_double(),
+                    DarkAs = col_double(),
+                    DarkAp = col_double(),
+                    MeanAs = col_double(),
+                    MeanAp = col_double(),
+                    LightP = col_double(),
+                    C14A1p = col_double(),
+                    C14A2p = col_double(),
+                    BtlNum = col_double(),
+                    NH3uM = col_double(),
+                    R_NH4 = col_double(),
+                    DIC1 = col_double(),
+                    DIC2 = col_double(),
+                    TA1 = col_double(),
+                    TA2 = col_double(),
+                    pH1 = col_double(),
+                    pH2 = col_double()
+                  )
+)
+
+# Cast data
+cast = read_csv('./data/cast.csv')
+
+```
+
+<!-- Cleaning/preparing data -->
+
+```{r}
+
+# Preparing dataset
+bottle_new = 
+  bottle %>% 
+  select(
+    Cst_Cnt,
+    Btl_Cnt,
+    Sta_ID,
+    RecInd,
+    R_Depth,
+    R_TEMP, T_degC,
+    R_POTEMP,
+    R_SALINITY, Salnty,
+    R_SIGMA, STheta,
+    R_CHLA, ChlorA,
+    R_PHAEO, Phaeop,
+    R_PO4, PO4uM,
+    R_SIO3, SiO3uM,
+    R_NO2, NO2uM,
+    R_NO3, NO3uM,
+    R_PRES,
+    R_SVA,
+    R_NH4, NH3uM,
+    C14As1, DarkAs, MeanAs, 
+    # DIC1, DIC2, TA1, TA2,      # Almost 100% missing
+    R_O2, O2ml_L, 
+    R_O2Sat, O2Sat,
+    `Oxy_µmol/Kg`
+  ) %>% 
+  left_join(
+    .,
+    cast %>% select(Cst_Cnt, Date, Lat_Dec, Lon_Dec),   # From cast data, only using: join variable, date, lat, long
+    by = "Cst_Cnt"
+  ) %>% 
+  mutate(
+    date = as.character(Date),
+    date = mdy(date),
+    month = floor_date(date, "month"),
+    year = year(date),
+    month_num = month(date)
+  )
+    
+```
+
+<!-- Selecting variables for final dataset -->
+
+```{r}
+set.seed(1)
+
+data_final =  
+  bottle_new %>% 
+  filter(year >= 2008) %>%
+  select(
+    outcome = `Oxy_µmol/Kg`,
+    date, 
+    month,
+    year,
+    month_num,
+    lat = Lat_Dec, long = Lon_Dec,
+    temp_c = R_TEMP,
+    sal = R_SALINITY,
+    p_dens = R_SIGMA,
+    pres = R_PRES,
+    phaeo = R_PHAEO,
+    po4 = R_PO4,
+    sio3 = R_SIO3,
+    no2 = R_NO2,
+    nh4 = R_NH4,          
+    chlor = R_CHLA,
+  ) %>% 
+  drop_na() %>% 
+  sample_frac(size = .1)
+
+data_final_no_dates =
+  data_final %>% 
+  select(-date, -month)
+```
+
+<!-- Creating train/test sets -->
+
+```{r}
+set.seed(1)
+# Creating training and testing datasets
+
+train_idx =
+  createDataPartition(data_final$outcome,
+                      p = .8,
+                      list = F)
+
+train_with_extra_vars =
+  data_final[train_idx, ]
+
+train = 
+  train_with_extra_vars %>% 
+  select(-date, -month)
+
+test =
+  data_final[-train_idx, ] %>% 
+  select(-date, -month)
+
+rm(train_idx, bottle, bottle_new, cast)
+
+```
+
+## 2. **Exploratory analysis/visualization**
+
+__*2.a.  Correlation.*__
+
+A correlation matrix was created (see Figure 1, Appendix) to estimate linear (Pearson's) correlation values among the outcome and all features. Several features were highly correlated, particularly the feature pairs temperature/potential density, SiO~3~/PO~4~, and PO~4~/potential density; as well as the outcome-feature pairs O~2~/PO~4~ and O~2~/SiO~3~. Since correlation amongst predictors can cause problems, I was careful to consider these highly-correlated predictors in both model selection and interpretation.
+
+__*2.b.  Nonlinearity.*__
+
+Scatterplots were plotted for all non-datetime features against the outcome (see Figure 2, Appendix). To assess potential nonlinear associations between features and outcome, a cubic spline smoother was plotted with each scatterplot for visualization purposes. Nonlinear relationships with the outcome were apparent for some features, especially water temperature, salinity, potential density, phosphate, and chlorophyll. Since a significant number of features displayed potential nonlinearity in their relationships with the outcome, I considered this during model selection.
+
+__*2.c.  Timewise trends.*__
+
+Finally, timewise trends in the outcome were explored on seasonal and long-term scales (results not shown). To explore seasonality, I fit a cyclic cubic spline smoother to outcome levels plotted by month of year, irrespective of year. No clear seasonal trends in the outcome were apparent. I also fit both linear and cubic spline smoother to explore the long-term trend in outcome across years, but again, no clear patterns were apparent. (Note: the current restricted timeseries is only 9 years long, so we shouldn't necessarily expect to detect any long-term trends.) Code for these timewise trend analyses is included in an appendix at the bottom of the submitted RMarkdown file.
+
+## 3. **Models** {#models}
+
+__*3.a.  Candidate models.*__
+
+For each candidate model, the 14 predictors included were as follows: year, month, latitude and longitude (decimals), temperature (°C), salinity (PSS-78 scale), potential water density (kg/m^3^), pressure (decibars), phaeophytin (µg/L), chlorophyll (µg/L), phosphate (µmol/L), silicate (µmol/L), nitrite (µmol/L), and ammonium (µmol/L).
+
+I began by fitting several models using `caret::train()` using my training data, and comparing them using their respective cross-validation (CV) root mean square error (RMSE) rates. Figure 3 (Appendix) details the cross-validated RMSE distribution for each model.
+
+I began with a linear model fit with least squares as a baseline model. I then fit two slightly more flexible linear methods, for which the data were centered and scaled: elastic net (EN) and principal components regression (PCR). After these, I fit two nonlinear regression models: a generalized additive model (GAM), and a multivariate adaptive regression spline (MARS) model. 
+
+__*3.b.  Tuning.*__
+
+I tuned each candidate model's tuning parameter(s) using 5 repeats of 5-fold cross validation. The elastic net model was tuned over a grid of 11 `alpha` values ranging from 0 to 1 and 100 `lambda` values ranging from *exp*(-12) to *exp*(-4). The PCR model was tuned over a grid of `ncomp` (number of principal components to include) ranging from 1 to *p* = 14. For the GAM model, thin-plate penalized regression splines were fit to predictors with 10+ unique values, and spline degrees of freedom and feature selection were determined via generalized cross validation. The MARS model was tuned over a grid of `degree` (of interaction) values from 1 to 3 and `nprune` (number of terms to retain) from 2 to 35.
+
+Final candidate models were then compared using CV RMSE distributions, and the final model was selected using the model with the lowest median CV RMSE. More details can be found in the submitted RMarkdown file.
+
+<!-- OLS -->
+
+```{r ols}
+set.seed(1)
+
+## Ordinary least squares (OLS) - baseline model
+
+# trainControl for all models
+all_control = trainControl(method = "repeatedcv", number = 5, repeats = 5)
+                           #verboseIter = TRUE)
+ols_fit = 
+  train(outcome ~ .,
+        data = train,
+        method = "lm",
+        trControl = all_control)
+
+```
+
+<!-- Elastic Net -->
+
+```{r enet}
+set.seed(1)
+
+## Elastic Net - good to deal with groups of highly-correlated predictors
+
+en_tune = expand.grid(alpha = seq(0, 1, length = 11), 
+                      lambda = exp(seq(-12, -4, length = 100)))
+
+en_fit =
+  train(outcome ~ .,
+        data = train,
+        method = "glmnet",
+        trControl = all_control,
+        tuneGrid = en_tune)
+
+en_best = en_fit$bestTune
+
+# ggplot(en_fit, highlight = TRUE)
+
+```
+
+<!-- PCR -->
+
+```{r pcr}
+set.seed(1)
+
+## Principal components regression - also useful to deal with highly-correlated predictors
+
+pcr_fit = 
+  train(outcome ~ .,
+        data = train,
+        method = "pcr",
+        tuneGrid  = data.frame(ncomp = 1:(ncol(train) - 1)),  # Max components = p, subtract 1 b/c outcome is a column
+        trControl = all_control,
+        preProc = c("center", "scale"))
+
+# ggplot(pcr_fit, highlight = TRUE)
+
+```
+
+<!-- GAM -->
+
+```{r}
+set.seed(1)
+
+## GAM
+
+gam_fit = 
+  train(outcome ~ .,
+        data = train,
+        method = "gam",
+        tuneGrid = data.frame(method = "GCV.Cp", 
+                              select = c(TRUE, FALSE)),
+        trControl = all_control)
+
+# plot(gam_fit)
+
+```
+
+<!-- MARS -->
+
+```{r}
+set.seed(1)
+
+## MARS
+
+mars_tune = expand.grid(degree = 1:3, 
+                        nprune = 2:35)
+
+mars_fit =
+  train %>% 
+# mars_fit = 
+  train(outcome ~ .,
+        data = .,
+        method = "earth",
+        tuneGrid = mars_tune,
+        trControl = all_control)
+
+# ggplot(mars_fit, highlight = TRUE)
+
+```
+
+__*3.c.  Final Model.*__
+
+The final model chosen according to RMSE was the MARS model (see Figure 3). The final model selected 8 of the 14 predictors that were initially included in the candidate models, a decision made by cross validation (see Figure 4 for selected features).
+
+MARS is an adaptive regression method using piecewise linear basis functions. It is implemented here via the `earth` package (within `caret::train()`). These models are nonparametric and thus make no assumptions about the underlying distributions of data. This proved useful in this case due to observed potential nonlinear relationships between exposures and outcome.
+
+*3.c.i.   Test error rate.*    Upon evaluating the MARS model using my test data, the test RMSE rate was equal to `r modelr::rmse(mars_fit, test)`.
+
+*3.c.ii.  Important variables.*    The most important variable in the MARS model, determined by reduction in GCV error upon variable addition to model (Figure 4), was PO~4~. Since PO~4~ is highly negatively correlated with the outcome, oxygenation, we might be able to claim that as PO~4~ increases in seawater, O~2~ decreases on average. A list of coefficients (Table 1) also shows that the model fit interaction terms between PO~4~ and salinity. This can be explored using partial dependence plots (Figure 5): both predictors have a negative association with oxygenation, but in the 3D dependence plot, we see that deoxygenation may be worst when both salinity and phosphates are high. (These plots are for average trends, however, and may not be true across values of other predictors.)
+
+The phosphate-oxygen relationship has been noted in previous literature, in which increased phosphorus levels lead to increased ocean productivity, which increases oxygen demand and thus decreases oxygen levels (e.g. Watson et al., 2017). However, since this variable was highly correlated with other variables (see Figure 1), the importance of other variables could be obscured relative to PO~4~'s importance.
+
+*3.c.iii. Interpretation and limitations.*    While a limitation of MARS models is somewhat limited interpretability, especially for relationships between individual predictors and outcome, I believe a strength of this MARS model is its consideration of both nonlinear and interaction effects. From exposure scatterplots, we can be fairly confident that there were nonlinear relationships present, and I determined via GCV that including 3rd order interaction terms was best for the MARS predictive ability. Thus, I think that model complexity was sufficient to capture underlying truth.
+
+## 4. **Conclusions**
+
+__*4.a.  Summary of findings.*__ 
+
+In conclusion, I found that a MARS model with third-degree interaction terms and 8 selected features provided the best overall prediction of seawater oxygenation, given the 14 predictors initially included in candidate prediction models. Of these predictors, PO~4~ levels were highly predictive of the outcome, which is logical given previous literature. Other important predictors may include salinity, water temperature, and chlorophyll, but interpretation is somewhat limited given highly correlated predictors. Similar models may be useful in several cases: (1) if future predictions of seawater oxygenation are desired given trends in other factors; and (2) if oxygen measurements are unavailable but other relevant predictor data are.
+
+__*4.b.  Limitations of findings.*__
+
+These data were exclusively gathered in the Pacific Ocean off the coast of California; thus, these prediction models and any interpretations may not be generalizable to data outside of this geographic area. Additionally, I limited my analyses to data from 2008-2016, which may limit temporal interpretation.
+
+<br>
+<br>
+<br>
+
+# References
+
+Keeling RF, Kortzinger A,  Gruber N (2010). Ocean Deoxygenation in a Warming World. Annu Rev Marine Sci, 2:463–93.
+
+Watson AJ, Lenton TM, Mills BJW (2017). Ocean deoxygenation, the global phosphorus cycle and the possibility of human-caused large-scale ocean anoxia. Philos Trans A Math Phys Eng Sci, 375(2102).
+
+\newpage
+
+# Appendix: Figures & Tables
+
+<!-- Figure 1: Correlation matrix -->
+
+```{r, fig.align = 'center', fig.fullwidth = TRUE}
+# Correlation plot (potential figure)
+# plot.new()
+# fig1 =
+  train %>% 
+  select(outcome, year, month_num, everything()) %>% 
+  rename(O2_outcome = outcome,
+         NH4 = nh4, NO2 = no2, SiO3 = sio3, PO4 = po4,
+         chlorophyll = chlor,
+         phaeophytin = phaeo,
+         pressure = pres,
+         density = p_dens,
+         salinity = sal,
+         month = month_num) %>% 
+  cor() %>% 
+  ggcorrplot::ggcorrplot(type = "lower",
+                         colors = c("#ED6A5A", "#FFFFF9", "#36C9C6"),
+                         show.diag = FALSE,
+                         lab = TRUE,
+                         lab_size = 1.75) +
+  labs(title = "Figure 1. Correlation matrix of outcome and features") +
+  theme(plot.title.position = "plot",
+        legend.position = "bottom")
+```
+
+\newpage
+
+<!-- Figure 2: Scatterplots -->
+
+```{r fig.height = 16, fig.width = 12, dpi = 300, dev = "CairoPNG"}
+#add `dpi=300` above for good quality
+
+################ Scatters (potential figures)
+plot_predictors = function(predictor, xlab) {
+  
+  train %>% 
+  ggplot(aes_string(x = predictor, y = 'outcome')) +
+  geom_point(alpha = 0.4, color = 'DarkGray') +                                           
+  geom_smooth(color = 'IndianRed',                       
+              se = FALSE) +
+  theme_bw() +
+  labs(
+    y = "Oxygen (µmol/kg)",
+    x = paste0(xlab)
+  )
+  
+}
+
+predictor_list =
+  tibble(
+    predictor = (
+      train %>% 
+      select(
+        -outcome,
+        -year, -month_num
+      ) %>% 
+      names()),
+    xlab = c(
+      # not including month
+      "Latitude (decimals)",
+      "Longitude (decimals)",
+      "Water temperature (C)",
+      "Salinity (unitless - see PSS-78 measurement)",
+      "Potential density of water",
+      "Pressure (decibars)",
+      "Phaeophytin (µg/L)",
+      "Phosphate (µmol/L)",
+      "Silicate (µmol/L)",
+      "Nitrite (µmol/L)",
+      "Ammonium (µmol/L)",
+      "Chlorophyll (µg/L)"
+    )
+)
+
+# # Test
+# plot_predictors('temp_c')
+
+scatter_list =
+  pmap(predictor_list, plot_predictors)
+
+# fig2 =
+  cowplot::plot_grid(plotlist = scatter_list,
+                   ncol = 3) %>% 
+  patchwork::wrap_elements() +
+  labs(title = "Figure 2. Ocean oxygenation level, by select predictors",
+       subtitle = "Smoothed fit using cubic spline smoother") +
+  
+  theme(plot.title = element_text(hjust = .5,
+                                  size = 18),
+        plot.subtitle = element_text(hjust = .5,
+                                     size = 10)
+  )
+
+```
+
+\newpage
+
+<!-- Figure 3: Comparing CV RMSEs -->
+
+```{r}
+# Comparing RMSEs
+
+resample_data =
+  resamples(list("OLS" = ols_fit,
+                 "Elastic Net" = en_fit,
+                 "PCR" = pcr_fit,
+                 "GAM" = gam_fit,
+                 "MARS" = mars_fit))
+
+bwplot(resample_data, metric = "RMSE", 
+       main = "Figure 3. Cross-validated RMSE distribution, by model", 
+       par.settings = list(par.main.text = list(cex = 1.1,
+                                                font = 1)),
+       pch = "|"
+)
+
+```
+
+<!-- Figure 4: Variable importance plot, final MARS model -->
+
+```{r}
+# MARS variable importance
+
+vip::vip(mars_fit, value = "gcv", geom = "point", num_features = 8L) + 
+  labs(title = "Figure 4. Final MARS model: variable importance",
+       subtitle = "Determined via GCV") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+
+```
+
+\newpage
+
+<!-- Figure 5: Partial dependence plots -->
+
+\begin{center}
+
+```{r, out.width='70%', echo = FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(pdp)
+library(conflicted)
+library(patchwork)
+conflict_prefer("partial", "pdp")
+
+# mars_fit = readRDS('./models/mars_fit.RDS')
+
+p1 = partial(mars_fit, pred.var = "po4", grid.resolution = 10) %>% autoplot() + 
+  labs(x = "PO4 (µmol/L)", 
+       y = "Predicted oxygen level (µmol/kg)") +
+  theme_bw()
+
+p2 = partial(mars_fit, pred.var = "sal", grid.resolution = 10) %>% autoplot() + 
+  labs(x = "Salinity (PSS-78 scale)", 
+       y = "Predicted oxygen level (µmol/kg)") + 
+  theme_bw()
+
+p3 = partial(mars_fit, pred.var = c("po4", "sal"), grid.resolution = 10) %>% 
+  plotPartial(levelplot = FALSE, xlab = "Salinity", ylab = "PO4", zlab = "O2",
+              drape = TRUE, colorkey = TRUE, screen = list(z = -130, x = -60))
+
+patchwork::wrap_elements(p1 + p2) + labs(title = "Figure 5. Partial dependence plots on outcome oxygenation",
+                                         subtitle = "Predictors PO4 and salinity") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+```{r, out.width='60%', echo = FALSE, message = FALSE, warning = FALSE}
+p3
+```
+
+\end{center}
+\newpage
+
+<!-- Table 1: MARS coefficients -->
+
+```{r}
+
+coef(mars_fit$finalModel) %>% 
+  enframe() %>% 
+  knitr::kable("latex", booktabs = T, linesep = "", 
+               col.names = c("Predictor", "Estimate"),
+               caption = "Selected features and estimated coefficients, MARS model") %>%
+  kableExtra::kable_styling(latex_options = c("striped", "hold_position"))
+
+```
+
+
+
+
+
+
+<!-- SEE BELOW FOR UNINCLUDED WORK -->
+
+
+
+
+
+
+<!-- ### Appendix 2: Unincluded Work ### -->
+
+<!-- 0. Saving models for use in other files -->
+
+```{r, include = FALSE, eval = FALSE}
+
+# saveRDS(ols_fit, './models/ols_fit.RDS')
+# saveRDS(en_fit, './models/en_fit.RDS')
+# saveRDS(pcr_fit, './models/pcr_fit.RDS')
+# saveRDS(gam_fit, './models/gam_fit.RDS')
+# saveRDS(mars_fit, './models/mars_fit.RDS')
+
+```
+
+
+<!-- 1. Exploratory Outlier Visualization -->
+
+```{r, include = FALSE, eval = FALSE}
+
+# Outlier analysis using boxplots
+# outlier_check = function(predictor, xlab) {
+#   
+#   train %>% 
+#     ggplot(aes_string(y = predictor)) +
+#     geom_boxplot() +
+#     labs(y = paste0(xlab))
+#   
+# }
+# 
+# boxplot_list = pmap(predictor_list, outlier_check)
+# Manually call boxplots to assess each variable for outliers, e.g. boxplot_list[[2]]
+
+```
+
+<!-- 2. Exploratory Timewise Trend Analyses -->
+
+```{r, include = FALSE, eval = FALSE}
+
+# Testing month and year for timewise trends
+
+  # Month/seasonal
+  # train %>% 
+  #   mutate(month_num = as.factor(month_num)) %>% 
+  #   ggplot(aes(x = month_num, y = outcome)) +
+  #   geom_violin()
+  # 
+  # ggplot(data = train,
+  #        aes(x = month_num, y = outcome)) +
+  #   geom_point() +
+  #   geom_smooth(method = "gam", formula = y ~ s(x, bs = "cc", k = 9))
+  # 
+  # # Year
+  # train %>% 
+  #   mutate(year = as.factor(year)) %>% 
+  #   ggplot(aes(x = year, y = outcome)) +
+  #   geom_violin()
+  # 
+  # ggplot(data = train,
+  #        aes(x = year, y = outcome)) +
+  #   geom_point() +
+  #   geom_smooth(method = "gam", formula = y ~ s(x, k = 9), color = 'IndianRed', alpha = 0.75) +
+  #   geom_smooth(method = "lm", alpha = 0.75)
+
+```

@@ -1,0 +1,15 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+data
+models
+resources
+table.pdf
+testing_figs.pdf
+testing_figs.Rmd
+explore.Rmd
+final_text.Rmd
+ds2_midterm_plan.*
+*.log
+*Dictionary
